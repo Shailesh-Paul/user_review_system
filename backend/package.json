@@ -1,0 +1,19 @@
+{
+  "name": "roxiler-backend",
+  "version": "1.0.0",
+  "description": "Backend foundation for Roxiler Store Rating Platform",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "migrate": "node database/migrate.js",
+    "seed": "node database/seed.js"
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.3",
+    "mysql2": "^3.9.7"
+  }
+}

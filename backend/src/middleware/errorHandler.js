@@ -1,5 +1,5 @@
 export const errorHandler = (err, req, res, next) => {
-  console.error('Unhandled Error:', err.message);
+  console.error('Unhandled request error:', err);
   
   res.status(500).json({
     success: false,

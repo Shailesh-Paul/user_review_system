@@ -32,5 +32,14 @@ export const env = {
   jwt: {
     secret: process.env.JWT_SECRET,
     expiresIn: process.env.JWT_EXPIRES_IN,
+  },
+  cloudinary: {
+    cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+    apiKey: process.env.CLOUDINARY_API_KEY,
+    apiSecret: process.env.CLOUDINARY_API_SECRET
+  },
+  ai: {
+    apiKey: process.env.AI_API_KEY || process.env.GEMINI_API_KEY,
+    model: process.env.AI_MODEL || 'gemini-2.5-flash'
   }
 };

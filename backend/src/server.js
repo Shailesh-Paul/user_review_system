@@ -20,7 +20,7 @@ const gracefulShutdown = async (signal) => {
     console.log('Database connection pool closed.');
     process.exit(0);
   } catch (err) {
-    console.error('Error closing database connections:', err);
+    console.error('Error closing database connection pool.');
     process.exit(1);
   }
 };

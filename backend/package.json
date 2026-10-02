@@ -7,13 +7,16 @@
   "scripts": {
     "start": "node src/server.js",
     "migrate": "node database/migrate.js",
-    "seed": "node database/seed.js"
+    "seed": "node database/seed.js",
+    "reset-admin": "node scripts/reset-admin-password.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
+    "cloudinary": "^2.11.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.3",
+    "multer": "^2.4.0",
     "mysql2": "^3.9.7"
   }
 }

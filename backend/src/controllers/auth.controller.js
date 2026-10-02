@@ -1,15 +1,20 @@
+import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import pool from '../config/db.js';
 import { env } from '../config/env.js';
+import { validateEmail, validatePassword } from '../utils/validation.js';
 
-// Basic validators
-const validateEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-const validatePassword = (password) => {
-  // 8-16 chars, 1 uppercase, 1 number, 1 special char
-  const regex = /^(?=.*[A-Z])(?=.*\d)(?=.*[\W_]).{8,16}$/;
-  return regex.test(password);
+const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
+
+const hasMustChangePasswordColumn = async () => {
+  const [columns] = await pool.query("SHOW COLUMNS FROM users LIKE 'must_change_password'");
+  return columns.length > 0;
 };
+
+const generateResetToken = () => crypto.randomBytes(32).toString('hex');
+
+const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
 export const register = async (req, res, next) => {
   try {
@@ -37,12 +42,17 @@ export const register = async (req, res, next) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
+    const includeMustChangePassword = await hasMustChangePasswordColumn();
 
     // Create user. Force role to USER regardless of input.
-    const [result] = await pool.query(
-      'INSERT INTO users (name, email, password_hash, address, role) VALUES (?, ?, ?, ?, ?)',
-      [name, normalizedEmail, passwordHash, address || null, 'USER']
-    );
+    const insertSql = includeMustChangePassword
+      ? 'INSERT INTO users (name, email, password_hash, address, role, must_change_password) VALUES (?, ?, ?, ?, ?, ?)'
+      : 'INSERT INTO users (name, email, password_hash, address, role) VALUES (?, ?, ?, ?, ?)';
+    const insertValues = includeMustChangePassword
+      ? [name, normalizedEmail, passwordHash, address || null, 'USER', false]
+      : [name, normalizedEmail, passwordHash, address || null, 'USER'];
+
+    const [result] = await pool.query(insertSql, insertValues);
 
     res.status(201).json({
       success: true,
@@ -69,7 +79,10 @@ export const login = async (req, res, next) => {
 
     const normalizedEmail = email.toLowerCase().trim();
 
-    const [rows] = await pool.query('SELECT id, name, email, address, role, password_hash FROM users WHERE email = ?', [normalizedEmail]);
+    const [rows] = await pool.query(
+      'SELECT * FROM users WHERE email = ?',
+      [normalizedEmail]
+    );
     if (rows.length === 0) {
       return res.status(401).json({ success: false, message: 'Invalid credentials.' });
     }
@@ -86,6 +99,8 @@ export const login = async (req, res, next) => {
       { expiresIn: env.jwt.expiresIn }
     );
 
+    const mustChangePassword = user.must_change_password ?? false;
+
     res.json({
       success: true,
       message: 'Login successful',
@@ -95,7 +110,8 @@ export const login = async (req, res, next) => {
         name: user.name,
         email: user.email,
         address: user.address,
-        role: user.role
+        role: user.role,
+        mustChangePassword: Boolean(mustChangePassword)
       }
     });
   } catch (error) {
@@ -128,11 +144,109 @@ export const updatePassword = async (req, res, next) => {
     }
 
     const newPasswordHash = await bcrypt.hash(newPassword, 10);
-    await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [newPasswordHash, userId]);
+    const includeMustChangePassword = await hasMustChangePasswordColumn();
+
+    if (includeMustChangePassword) {
+      await pool.query(
+        'UPDATE users SET password_hash = ?, must_change_password = FALSE WHERE id = ?',
+        [newPasswordHash, userId]
+      );
+    } else {
+      await pool.query(
+        'UPDATE users SET password_hash = ? WHERE id = ?',
+        [newPasswordHash, userId]
+      );
+    }
 
     res.json({
       success: true,
       message: 'Password updated successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const forgotPassword = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+
+    if (!email || !validateEmail(email)) {
+      return res.status(400).json({ success: false, message: 'A valid email address is required.' });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const [rows] = await pool.query('SELECT id, email FROM users WHERE email = ?', [normalizedEmail]);
+
+    if (rows.length === 0) {
+      return res.json({
+        success: true,
+        message: 'If an account matches that email, a password reset link has been sent.'
+      });
+    }
+
+    const user = rows[0];
+    const token = generateResetToken();
+    const tokenHash = hashToken(token);
+    const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS);
+
+    await pool.query('DELETE FROM password_reset_tokens WHERE user_id = ?', [user.id]);
+    await pool.query(
+      'INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)',
+      [user.id, tokenHash, expiresAt]
+    );
+
+    const resetToken = process.env.NODE_ENV !== 'production' ? token : undefined;
+
+    res.json({
+      success: true,
+      message: 'If an account matches that email, a password reset link has been sent.',
+      ...(resetToken ? { resetToken } : {})
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const resetPassword = async (req, res, next) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    if (!token || !newPassword) {
+      return res.status(400).json({ success: false, message: 'Reset token and new password are required.' });
+    }
+
+    if (!validatePassword(newPassword)) {
+      return res.status(400).json({ success: false, message: 'New password must be 8-16 characters long, contain at least one uppercase letter, one number, and one special character.' });
+    }
+
+    const tokenHash = hashToken(String(token).trim());
+    const [resetRows] = await pool.query(
+      'SELECT id, user_id FROM password_reset_tokens WHERE token_hash = ? AND expires_at > NOW() AND used_at IS NULL ORDER BY created_at DESC LIMIT 1',
+      [tokenHash]
+    );
+
+    if (resetRows.length === 0) {
+      return res.status(401).json({ success: false, message: 'This reset link is invalid or has expired.' });
+    }
+
+    const resetRecord = resetRows[0];
+    const [userRows] = await pool.query('SELECT id FROM users WHERE id = ?', [resetRecord.user_id]);
+
+    if (userRows.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+
+    const newPasswordHash = await bcrypt.hash(newPassword, 10);
+    await pool.query(
+      'UPDATE users SET password_hash = ?, must_change_password = FALSE WHERE id = ?',
+      [newPasswordHash, resetRecord.user_id]
+    );
+    await pool.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = ?', [resetRecord.id]);
+
+    res.json({
+      success: true,
+      message: 'Password reset successful. Please sign in with your new password.'
     });
   } catch (error) {
     next(error);

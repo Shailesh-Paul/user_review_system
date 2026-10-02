@@ -13,8 +13,9 @@ export const PublicRoute = () => {
   }
 
   if (user) {
+    if (user.mustChangePassword && user.role === 'ADMIN') return <Navigate to="/change-password" replace />;
     if (user.role === 'ADMIN') return <Navigate to="/admin" replace />;
-    if (user.role === 'STORE_OWNER') return <Navigate to="/store-owner" replace />;
+    if (user.role === 'STORE_OWNER') return <Navigate to="/store-owner/dashboard" replace />;
     return <Navigate to="/stores" replace />;
   }
 

@@ -2,6 +2,7 @@ import pool from '../config/db.js';
 import { validateEmail } from '../utils/validation.js';
 import { cloudinary } from '../utils/cloudinary.js';
 import { generateAIDraft } from '../utils/ai.js';
+import { notifyStoreOwnerAboutFeedback } from '../utils/notifications.js';
 
 export const getMyProfile = async (req, res, next) => {
   try {
@@ -15,13 +16,19 @@ export const getMyProfile = async (req, res, next) => {
 
 export const updateMyProfile = async (req, res, next) => {
   try {
-    const { name, email, address } = req.body;
+    const { name, email, address } = req.body ?? {};
     let updates = [];
     let params = [];
 
-    if (name) { updates.push('name = ?'); params.push(name); }
-    if (email) {
-      if (!validateEmail(email)) return res.status(400).json({ success: false, message: 'Invalid email format' });
+    if (name !== undefined) {
+      if (typeof name !== 'string' || name.trim().length < 20 || name.trim().length > 60) {
+        return res.status(400).json({ success: false, message: 'Name must be between 20 and 60 characters.' });
+      }
+      updates.push('name = ?');
+      params.push(name.trim());
+    }
+    if (email !== undefined) {
+      if (typeof email !== 'string' || !validateEmail(email.trim())) return res.status(400).json({ success: false, message: 'Invalid email format' });
       const normalizedEmail = email.toLowerCase().trim();
       
       const [existing] = await pool.query('SELECT id FROM users WHERE email = ? AND id != ?', [normalizedEmail, req.user.id]);
@@ -29,7 +36,13 @@ export const updateMyProfile = async (req, res, next) => {
       
       updates.push('email = ?'); params.push(normalizedEmail);
     }
-    if (address) { updates.push('address = ?'); params.push(address); }
+    if (address !== undefined) {
+      if (typeof address !== 'string' || address.length > 400) {
+        return res.status(400).json({ success: false, message: 'Address must not exceed 400 characters.' });
+      }
+      updates.push('address = ?');
+      params.push(address.trim() || null);
+    }
 
     if (updates.length === 0) return res.status(400).json({ success: false, message: 'No valid fields provided for update' });
 
@@ -52,11 +65,19 @@ export const getStores = async (req, res, next) => {
     const params = [];
     const havingParams = [];
 
-    if (name) { whereClause += ' AND s.name LIKE ?'; params.push(`%${name}%`); }
-    if (address) { whereClause += ' AND s.address LIKE ?'; params.push(`%${address}%`); }
+    if (typeof name === 'string' && name.trim()) { whereClause += ' AND LOWER(s.name) LIKE LOWER(?)'; params.push(`%${name.trim()}%`); }
+    if (typeof address === 'string' && address.trim()) { whereClause += ' AND LOWER(s.address) LIKE LOWER(?)'; params.push(`%${address.trim()}%`); }
 
-    if (minRating) { havingClause += ' AND averageRating >= ?'; havingParams.push(parseFloat(minRating)); }
-    if (maxRating) { havingClause += ' AND averageRating <= ?'; havingParams.push(parseFloat(maxRating)); }
+    const parsedMinRating = minRating === undefined || minRating === '' ? null : Number(minRating);
+    const parsedMaxRating = maxRating === undefined || maxRating === '' ? null : Number(maxRating);
+    if (parsedMinRating !== null && (!Number.isFinite(parsedMinRating) || parsedMinRating < 0 || parsedMinRating > 5)) {
+      return res.status(400).json({ success: false, message: 'Minimum rating must be between 0 and 5.' });
+    }
+    if (parsedMaxRating !== null && (!Number.isFinite(parsedMaxRating) || parsedMaxRating < 0 || parsedMaxRating > 5)) {
+      return res.status(400).json({ success: false, message: 'Maximum rating must be between 0 and 5.' });
+    }
+    if (parsedMinRating !== null) { havingClause += ' AND averageRating >= ?'; havingParams.push(parsedMinRating); }
+    if (parsedMaxRating !== null) { havingClause += ' AND averageRating <= ?'; havingParams.push(parsedMaxRating); }
 
     const allowedSort = ['name', 'rating', 'created_at'];
     let sField = 's.created_at';
@@ -84,7 +105,7 @@ export const getStores = async (req, res, next) => {
 
     const [stores] = await pool.query(`
       ${baseQuery}
-      ORDER BY ${sField} ${sOrder}
+      ORDER BY ${sField} ${sOrder}, s.id ${sOrder}
       LIMIT ? OFFSET ?
     `, [...params, ...havingParams, pLimit, offset]);
 
@@ -218,6 +239,19 @@ export const submitRating = async (req, res, next) => {
     }
 
     await connection.commit();
+
+    // Phase 17: notify the store owner about the new feedback (non-blocking).
+    try {
+      await notifyStoreOwnerAboutFeedback({
+        storeId,
+        rating,
+        hasReview: Boolean(finalReview),
+        ratingId
+      });
+    } catch (notifyErr) {
+      console.error('Failed to notify store owner about new rating:', notifyErr.message);
+    }
+
     res.status(201).json({
       success: true,
       message: 'Rating submitted successfully',
@@ -269,12 +303,13 @@ export const updateRating = async (req, res, next) => {
     connection = await pool.getConnection();
     await connection.beginTransaction();
 
-    const [existing] = await connection.query('SELECT id FROM ratings WHERE user_id = ? AND store_id = ?', [req.user.id, storeId]);
+    const [existing] = await connection.query('SELECT id, rating FROM ratings WHERE user_id = ? AND store_id = ?', [req.user.id, storeId]);
     if (existing.length === 0) {
       await connection.rollback();
       return res.status(404).json({ success: false, message: 'Rating not found. Submit a new rating first.' });
     }
     const ratingId = existing[0].id;
+    const previousRating = existing[0].rating;
 
     let updates = [];
     let params = [];
@@ -295,6 +330,22 @@ export const updateRating = async (req, res, next) => {
     }
 
     await connection.commit();
+
+    // Phase 17: notify the owner only when the customer added or changed review
+    // text, to avoid noisy notifications for silent rating-only edits.
+    if (review !== undefined && finalReview) {
+      try {
+        await notifyStoreOwnerAboutFeedback({
+          storeId,
+          rating: rating !== undefined ? rating : previousRating,
+          hasReview: true,
+          ratingId
+        });
+      } catch (notifyErr) {
+        console.error('Failed to notify store owner about updated review:', notifyErr.message);
+      }
+    }
+
     res.json({ success: true, message: 'Rating updated successfully' });
   } catch (err) {
     if (connection) await connection.rollback();
@@ -548,4 +599,3 @@ export const generateAiReviewDraft = async (req, res, next) => {
     next(err);
   }
 };
-

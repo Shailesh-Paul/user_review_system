@@ -144,6 +144,43 @@ const migrate = async () => {
     `);
     console.log('Password reset token table created or verified.');
 
+    // Phase 17: persistent notifications for meaningful platform events.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        type VARCHAR(40) NOT NULL,
+        title VARCHAR(150) NOT NULL,
+        message VARCHAR(500) NOT NULL,
+        entity_type VARCHAR(40) NULL,
+        entity_id INT NULL,
+        is_read BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        INDEX idx_notifications_user_read (user_id, is_read, created_at),
+        INDEX idx_notifications_created (created_at)
+      )
+    `);
+    console.log('Notifications table created or verified.');
+
+    // Phase 17: analytics indexes. MySQL lacks "CREATE INDEX IF NOT EXISTS",
+    // so duplicate-key errors are safely ignored to keep migration idempotent.
+    const analyticsIndexes = [
+      ['idx_ratings_store_created', 'CREATE INDEX idx_ratings_store_created ON ratings (store_id, created_at)'],
+      ['idx_ratings_created', 'CREATE INDEX idx_ratings_created ON ratings (created_at)'],
+      ['idx_stores_owner', 'CREATE INDEX idx_stores_owner ON stores (owner_id)'],
+      ['idx_products_store_status', 'CREATE INDEX idx_products_store_status ON products (store_id, status)']
+    ];
+
+    for (const [indexName, indexSql] of analyticsIndexes) {
+      try {
+        await pool.query(indexSql);
+        console.log(`Created analytics index ${indexName}.`);
+      } catch (e) {
+        if (e.code !== 'ER_DUP_KEYNAME') throw e;
+      }
+    }
+
     console.log('Database migration completed successfully.');
   } catch (err) {
     console.error('Migration failed:', err);

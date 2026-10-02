@@ -5,9 +5,10 @@ export const ProfilePagePlaceholder = () => {
   const { user } = useAuth();
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
+    <div className="profile-page page-enter mx-auto max-w-2xl space-y-6">
       <div className="border-b border-slate-200 dark:border-slate-800 pb-4">
-        <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+        <p className="eyebrow mb-1">Account</p>
+        <h1 className="editorial-title text-3xl text-slate-900">
           <User className="w-6 h-6 text-indigo-600 dark:text-indigo-400" />
           My Profile
         </h1>
@@ -16,7 +17,7 @@ export const ProfilePagePlaceholder = () => {
         </p>
       </div>
 
-      <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+      <div className="profile-summary bg-white p-6 space-y-4">
         <div className="flex items-center gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
           <div className="w-12 h-12 rounded-full bg-indigo-600 text-white font-bold text-lg flex items-center justify-center">
             {user?.name ? user.name[0].toUpperCase() : 'U'}

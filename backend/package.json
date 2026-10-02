@@ -8,7 +8,13 @@
     "start": "node src/server.js",
     "migrate": "node database/migrate.js",
     "seed": "node database/seed.js",
-    "reset-admin": "node scripts/reset-admin-password.js"
+    "seed:demo": "node scripts/populate_realistic_demo_data.js",
+    "seed:indian": "node scripts/seed_phase17_indian_data.js",
+    "reset-admin": "node scripts/reset-admin-password.js",
+    "inspect:stores": "node scripts/inspect_stores.js",
+    "verify:phase17": "node scripts/verify_phase17.js",
+    "test:phase17": "node scripts/test_phase17.js",
+    "test:phase9": "node src/test_phase9.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

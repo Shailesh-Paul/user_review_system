@@ -18,21 +18,22 @@ const hashToken = (token) => crypto.createHash('sha256').update(token).digest('h
 
 export const register = async (req, res, next) => {
   try {
-    const { name, email, password, address } = req.body;
+    const { name, email, password, address } = req.body ?? {};
 
-    if (!name || name.length < 20 || name.length > 60) {
+    if (typeof name !== 'string' || name.trim().length < 20 || name.trim().length > 60) {
       return res.status(400).json({ success: false, message: 'Name must be between 20 and 60 characters.' });
     }
-    if (!email || !validateEmail(email)) {
+    if (typeof email !== 'string' || !validateEmail(email.trim())) {
       return res.status(400).json({ success: false, message: 'Invalid email format.' });
     }
-    if (!password || !validatePassword(password)) {
-      return res.status(400).json({ success: false, message: 'Password must be 8-16 characters long, contain at least one uppercase letter, one number, and one special character.' });
+    if (typeof password !== 'string' || !validatePassword(password)) {
+      return res.status(400).json({ success: false, message: 'Password must be 8-16 characters long and contain at least one uppercase letter and one special character.' });
     }
-    if (address && address.length > 400) {
+    if (address !== undefined && (typeof address !== 'string' || address.length > 400)) {
       return res.status(400).json({ success: false, message: 'Address must not exceed 400 characters.' });
     }
 
+    const normalizedName = name.trim();
     const normalizedEmail = email.toLowerCase().trim();
 
     // Check duplicate
@@ -49,8 +50,8 @@ export const register = async (req, res, next) => {
       ? 'INSERT INTO users (name, email, password_hash, address, role, must_change_password) VALUES (?, ?, ?, ?, ?, ?)'
       : 'INSERT INTO users (name, email, password_hash, address, role) VALUES (?, ?, ?, ?, ?)';
     const insertValues = includeMustChangePassword
-      ? [name, normalizedEmail, passwordHash, address || null, 'USER', false]
-      : [name, normalizedEmail, passwordHash, address || null, 'USER'];
+      ? [normalizedName, normalizedEmail, passwordHash, address?.trim() || null, 'USER', false]
+      : [normalizedName, normalizedEmail, passwordHash, address?.trim() || null, 'USER'];
 
     const [result] = await pool.query(insertSql, insertValues);
 
@@ -59,9 +60,9 @@ export const register = async (req, res, next) => {
       message: 'Registration successful',
       user: {
         id: result.insertId,
-        name,
+        name: normalizedName,
         email: normalizedEmail,
-        address: address || null,
+        address: address?.trim() || null,
         role: 'USER'
       }
     });
@@ -72,9 +73,13 @@ export const register = async (req, res, next) => {
 
 export const login = async (req, res, next) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) {
+    const { email, password } = req.body ?? {};
+    if (typeof email !== 'string' || typeof password !== 'string' || !email.trim() || !password) {
       return res.status(400).json({ success: false, message: 'Email and password are required.' });
+    }
+
+    if (!validateEmail(email)) {
+      return res.status(400).json({ success: false, message: 'Invalid email format.' });
     }
 
     const normalizedEmail = email.toLowerCase().trim();
@@ -88,7 +93,14 @@ export const login = async (req, res, next) => {
     }
 
     const user = rows[0];
-    const isMatch = await bcrypt.compare(password, user.password_hash);
+    let isMatch = false;
+    try {
+      isMatch = await bcrypt.compare(password, user.password_hash);
+    } catch (error) {
+      console.error(`Password verification failed for user ${user.id}:`, error);
+      return res.status(401).json({ success: false, message: 'Invalid credentials.' });
+    }
+
     if (!isMatch) {
       return res.status(401).json({ success: false, message: 'Invalid credentials.' });
     }
@@ -121,7 +133,7 @@ export const login = async (req, res, next) => {
 
 export const updatePassword = async (req, res, next) => {
   try {
-    const { currentPassword, newPassword } = req.body;
+    const { currentPassword, newPassword } = req.body ?? {};
     const userId = req.user.id;
 
     if (!currentPassword || !newPassword) {
@@ -129,7 +141,7 @@ export const updatePassword = async (req, res, next) => {
     }
 
     if (!validatePassword(newPassword)) {
-      return res.status(400).json({ success: false, message: 'New password must be 8-16 characters long, contain at least one uppercase letter, one number, and one special character.' });
+      return res.status(400).json({ success: false, message: 'New password must be 8-16 characters long and contain at least one uppercase letter and one special character.' });
     }
 
     const [rows] = await pool.query('SELECT password_hash FROM users WHERE id = ?', [userId]);
@@ -169,9 +181,9 @@ export const updatePassword = async (req, res, next) => {
 
 export const forgotPassword = async (req, res, next) => {
   try {
-    const { email } = req.body;
+    const { email } = req.body ?? {};
 
-    if (!email || !validateEmail(email)) {
+    if (typeof email !== 'string' || !validateEmail(email.trim())) {
       return res.status(400).json({ success: false, message: 'A valid email address is required.' });
     }
 
@@ -210,14 +222,14 @@ export const forgotPassword = async (req, res, next) => {
 
 export const resetPassword = async (req, res, next) => {
   try {
-    const { token, newPassword } = req.body;
+    const { token, newPassword } = req.body ?? {};
 
     if (!token || !newPassword) {
       return res.status(400).json({ success: false, message: 'Reset token and new password are required.' });
     }
 
     if (!validatePassword(newPassword)) {
-      return res.status(400).json({ success: false, message: 'New password must be 8-16 characters long, contain at least one uppercase letter, one number, and one special character.' });
+      return res.status(400).json({ success: false, message: 'New password must be 8-16 characters long and contain at least one uppercase letter and one special character.' });
     }
 
     const tokenHash = hashToken(String(token).trim());

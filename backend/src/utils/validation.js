@@ -1,7 +1,7 @@
 export const validateEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
 export const validatePassword = (password) => {
-  // 8-16 chars, 1 uppercase, 1 number, 1 special char
-  const regex = /^(?=.*[A-Z])(?=.*\d)(?=.*[\W_]).{8,16}$/;
+  // 8-16 characters, at least one uppercase letter, and one special character.
+  const regex = /^(?=.*[A-Z])(?=.*[^A-Za-z0-9\s]).{8,16}$/;
   return regex.test(password);
 };

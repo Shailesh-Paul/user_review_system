@@ -1,5 +1,6 @@
 import pool from '../config/db.js';
 import { validateEmail } from '../utils/validation.js';
+import { resolveRange } from '../utils/analyticsRange.js';
 
 const normalizeStore = (store) => ({
   id: store.id,
@@ -334,14 +335,22 @@ export const getMyRatings = async (req, res, next) => {
     const params = [store.id];
 
     if (rating) {
+      const parsedRating = Number(rating);
+      if (!Number.isInteger(parsedRating) || parsedRating < 1 || parsedRating > 5) {
+        return res.status(400).json({ success: false, message: 'Rating filter must be an integer between 1 and 5.' });
+      }
       whereClause += ' AND r.rating = ?';
-      params.push(rating);
+      params.push(parsedRating);
     }
 
     const [[{ total }]] = await pool.query(`SELECT COUNT(*) as total FROM ratings r WHERE ${whereClause}`, params);
 
-    const allowedSort = ['rating', 'created_at'];
-    const sField = allowedSort.includes(sort) ? `r.${sort}` : 'r.created_at';
+    const allowedSort = ['rating', 'created_at', 'user_name'];
+    const sField = sort === 'user_name'
+      ? 'u.name'
+      : allowedSort.includes(sort)
+        ? `r.${sort}`
+        : 'r.created_at';
     const sOrder = order && order.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
 
     const pPage = Math.max(1, parseInt(page) || 1);
@@ -354,7 +363,7 @@ export const getMyRatings = async (req, res, next) => {
       FROM ratings r
       LEFT JOIN users u ON r.user_id = u.id
       WHERE ${whereClause}
-      ORDER BY ${sField} ${sOrder}
+      ORDER BY ${sField} ${sOrder}, r.id ${sOrder}
       LIMIT ? OFFSET ?
     `, [...params, pLimit, offset]);
 
@@ -389,6 +398,116 @@ export const getMyRatings = async (req, res, next) => {
         limit: pLimit,
         total,
         totalPages: Math.ceil(total / pLimit)
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Phase 17 — Store Owner analytics.
+ *
+ * Aggregates are computed in SQL for the authorized store only. A store owner
+ * can never request analytics for another owner's store because
+ * resolveAuthorizedStore enforces ownership and returns 403 otherwise.
+ */
+export const getStoreAnalytics = async (req, res, next) => {
+  try {
+    const { store, error } = await resolveAuthorizedStore(req, req.query.storeId, true);
+    if (error) return res.status(error.status).json({ success: false, message: error.message });
+
+    const { key: rangeKey, fromDate, dateFormat } = resolveRange(req.query.range);
+    const dateFilter = fromDate ? 'AND r.created_at >= ?' : '';
+    const ratingParams = fromDate ? [store.id, fromDate] : [store.id];
+
+    const [summaryRows] = await pool.query(`
+      SELECT
+        COUNT(r.id) AS totalRatings,
+        COALESCE(ROUND(AVG(r.rating), 2), 0) AS averageRating,
+        COALESCE(SUM(CASE WHEN r.review IS NOT NULL AND TRIM(r.review) <> '' THEN 1 ELSE 0 END), 0) AS totalReviews,
+        COALESCE(SUM(CASE WHEN r.rating = 1 THEN 1 ELSE 0 END), 0) AS count1,
+        COALESCE(SUM(CASE WHEN r.rating = 2 THEN 1 ELSE 0 END), 0) AS count2,
+        COALESCE(SUM(CASE WHEN r.rating = 3 THEN 1 ELSE 0 END), 0) AS count3,
+        COALESCE(SUM(CASE WHEN r.rating = 4 THEN 1 ELSE 0 END), 0) AS count4,
+        COALESCE(SUM(CASE WHEN r.rating = 5 THEN 1 ELSE 0 END), 0) AS count5
+      FROM ratings r
+      WHERE r.store_id = ? ${dateFilter}
+    `, ratingParams);
+
+    const [activityRows] = await pool.query(`
+      SELECT
+        DATE_FORMAT(r.created_at, ?) AS period,
+        COUNT(r.id) AS ratings,
+        COALESCE(SUM(CASE WHEN r.review IS NOT NULL AND TRIM(r.review) <> '' THEN 1 ELSE 0 END), 0) AS reviews,
+        COALESCE(ROUND(AVG(r.rating), 2), 0) AS averageRating
+      FROM ratings r
+      WHERE r.store_id = ? ${dateFilter}
+      GROUP BY period
+      ORDER BY period ASC
+    `, [dateFormat, ...ratingParams]);
+
+    const [productRows] = await pool.query(`
+      SELECT COUNT(*) AS totalProducts, COUNT(DISTINCT category) AS totalCategories
+      FROM products WHERE store_id = ?
+    `, [store.id]);
+
+    const [categoryRows] = await pool.query(`
+      SELECT category, COUNT(*) AS products
+      FROM products
+      WHERE store_id = ? AND category IS NOT NULL AND category <> ''
+      GROUP BY category
+      ORDER BY products DESC, category ASC
+    `, [store.id]);
+
+    const summary = summaryRows[0] ?? {};
+    const products = productRows[0] ?? {};
+
+    const reviewActivity = activityRows.map((row) => ({
+      period: row.period,
+      ratings: Number(row.ratings ?? 0),
+      reviews: Number(row.reviews ?? 0)
+    }));
+
+    const ratingTrend = activityRows.map((row) => ({
+      period: row.period,
+      averageRating: Number(row.averageRating ?? 0),
+      ratings: Number(row.ratings ?? 0)
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        store: {
+          id: store.id,
+          name: store.name,
+          category: store.category,
+          city: store.city,
+          state: store.state
+        },
+        range: rangeKey,
+        summary: {
+          averageRating: Number(summary.averageRating ?? 0),
+          totalRatings: Number(summary.totalRatings ?? 0),
+          totalReviews: Number(summary.totalReviews ?? 0),
+          totalProducts: Number(products.totalProducts ?? 0),
+          totalCategories: Number(products.totalCategories ?? 0)
+        },
+        distribution: {
+          '1': Number(summary.count1 ?? 0),
+          '2': Number(summary.count2 ?? 0),
+          '3': Number(summary.count3 ?? 0),
+          '4': Number(summary.count4 ?? 0),
+          '5': Number(summary.count5 ?? 0)
+        },
+        reviewActivity,
+        ratingTrend,
+        // Trend interpretation is only meaningful with at least two periods of data.
+        hasTrendData: ratingTrend.length >= 2,
+        categoryDistribution: categoryRows.map((row) => ({
+          category: row.category,
+          products: Number(row.products ?? 0)
+        }))
       }
     });
   } catch (err) {

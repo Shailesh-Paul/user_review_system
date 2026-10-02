@@ -12,10 +12,12 @@ export const RoleProtectedRoute = ({ allowedRoles }) => {
     );
   }
 
+  if (user?.mustChangePassword && user?.role === 'ADMIN') return <Navigate to="/change-password" replace />;
+
   if (!user || !allowedRoles.includes(user.role)) {
     // Redirect based on actual role if user exists
     if (user?.role === 'ADMIN') return <Navigate to="/admin" replace />;
-    if (user?.role === 'STORE_OWNER') return <Navigate to="/store-owner" replace />;
+    if (user?.role === 'STORE_OWNER') return <Navigate to="/store-owner/dashboard" replace />;
     if (user?.role === 'USER') return <Navigate to="/stores" replace />;
     return <Navigate to="/login" replace />;
   }

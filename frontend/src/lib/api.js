@@ -21,14 +21,37 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+let onUnauthorized = null;
+
+export const setUnauthorizedHandler = (handler) => {
+  onUnauthorized = handler;
+};
+
+export const getApiErrorMessage = (error, fallback = 'Something went wrong. Please try again.') => {
+  if (!error?.response) {
+    return 'Unable to reach the server. Check your connection and try again.';
+  }
+  const { status, data } = error.response;
+  if (typeof data?.message === 'string' && data.message.trim()) {
+    return data.message;
+  }
+  if (status === 403) {
+    return 'You do not have permission to perform this action.';
+  }
+  if (status >= 500) {
+    return 'Server error. Please try again later.';
+  }
+  return fallback;
+};
+
 // Response Interceptor: Uniform error handling & 401 token cleanup
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response && error.response.status === 401) {
-      // Token expired or invalid
       localStorage.removeItem('token');
       localStorage.removeItem('user');
+      onUnauthorized?.();
     }
     return Promise.reject(error);
   }

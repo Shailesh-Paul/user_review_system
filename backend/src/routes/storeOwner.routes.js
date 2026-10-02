@@ -10,7 +10,8 @@ import {
   updateStoreProduct,
   deleteStoreProduct,
   getDashboardStats,
-  getMyRatings
+  getMyRatings,
+  getStoreAnalytics
 } from '../controllers/storeOwner.controller.js';
 
 const router = Router();
@@ -28,6 +29,8 @@ router.patch('/stores/:storeId/products/:productId', updateStoreProduct);
 router.delete('/stores/:storeId/products/:productId', deleteStoreProduct);
 
 router.get('/dashboard', getDashboardStats);
+
+router.get('/analytics', getStoreAnalytics);
 
 router.get('/ratings', getMyRatings);
 

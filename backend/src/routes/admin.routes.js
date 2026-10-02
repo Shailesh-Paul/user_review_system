@@ -9,7 +9,8 @@ import {
   getStoreOwners,
   getStores,
   getReviews,
-  createStore
+  createStore,
+  getPlatformAnalytics
 } from '../controllers/admin.controller.js';
 
 const router = Router();
@@ -18,6 +19,8 @@ const router = Router();
 router.use(requireAuth, requireRole('ADMIN'));
 
 router.get('/dashboard/stats', getDashboardStats);
+
+router.get('/analytics', getPlatformAnalytics);
 
 router.get('/users', getUsers);
 router.post('/users', createUser);

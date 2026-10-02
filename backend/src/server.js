@@ -2,7 +2,7 @@ import { env } from './config/env.js';
 import app from './app.js';
 import pool from './config/db.js';
 
-const PORT = env.port || 3000;
+const PORT = process.env.port || 3000;
 
 const server = app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
